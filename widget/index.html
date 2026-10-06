@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nordic Tea Co. – chat widget demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f6f4ef; margin: 0; padding: 2rem; color: #222; }
+  #tea-chat { position: fixed; right: 1rem; bottom: 1rem; width: min(360px, calc(100vw - 2rem)); background: #fff;
+    border: 1px solid #d9d4c7; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.12); display: flex; flex-direction: column; max-height: 70vh; }
+  #tea-chat header { background: #2f5d50; color: #fff; padding: .75rem 1rem; border-radius: 12px 12px 0 0; font-weight: 600; }
+  #tea-log { flex: 1; overflow-y: auto; padding: .75rem; display: flex; flex-direction: column; gap: .5rem; min-height: 200px; }
+  .msg { padding: .5rem .75rem; border-radius: 10px; max-width: 85%; white-space: pre-wrap; line-height: 1.35; font-size: .93rem; }
+  .bot { background: #eef3f0; align-self: flex-start; }
+  .me { background: #2f5d50; color: #fff; align-self: flex-end; }
+  #tea-form { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid #eee; }
+  #tea-form input { flex: 1; padding: .5rem; border: 1px solid #ccc; border-radius: 8px; font: inherit; }
+  #tea-form button { padding: .5rem .9rem; border: 0; border-radius: 8px; background: #2f5d50; color: #fff; cursor: pointer; font: inherit; }
+  #tea-form button:disabled { opacity: .5; cursor: wait; }
+</style>
+</head>
+<body>
+<h1>Nordic Tea Co.</h1>
+<p>Demo page – the chat widget is in the bottom-right corner.</p>
+
+<!-- ===== Embed this block (div + script) in the Shopify theme, before </body> ===== -->
+<div id="tea-chat">
+  <header>Ask us anything</header>
+  <div id="tea-log" aria-live="polite"></div>
+  <form id="tea-form">
+    <input id="tea-input" maxlength="500" autocomplete="off" placeholder="Type your question…" required>
+    <button type="submit">Send</button>
+  </form>
+</div>
+<script>
+  // Change this to the public n8n URL of the client.
+  const WEBHOOK = "http://localhost:5678/webhook/faq-chat";
+
+  const sessionId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9_-]/g, "");
+  const log = document.getElementById("tea-log");
+  const form = document.getElementById("tea-form");
+  const input = document.getElementById("tea-input");
+  const button = form.querySelector("button");
+  let awaitingEmail = false;
+
+  function add(text, who) {
+    const d = document.createElement("div");
+    d.className = "msg " + who;
+    d.textContent = text;           // textContent: never inject bot output as HTML
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function post(payload) {
+    const res = await fetch(WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    return res.json();
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    add(text, "me");
+    button.disabled = true;
+    try {
+      const data = awaitingEmail
+        ? await post({ session_id: sessionId, action: "leave_contact", email: text })
+        : await post({ session_id: sessionId, message: text });
+      if (data.status === "ok") {
+        add(data.reply, "bot");
+        awaitingEmail = !!data.needs_contact;
+        input.placeholder = awaitingEmail ? "Your email address…" : "Type your question…";
+        input.type = awaitingEmail ? "email" : "text";
+      } else {
+        add(awaitingEmail ? "That email does not look valid, please try again." : "Sorry, something went wrong. Please try again.", "bot");
+      }
+    } catch {
+      add("Sorry, I can't reach the server right now. Please email support@nordictea.example.", "bot");
+    } finally {
+      button.disabled = false;
+      input.focus();
+    }
+  });
+
+  add("Hi! I can help with shipping, returns, payments and our teas. What would you like to know?", "bot");
+</script>
+</body>
+</html>
