@@ -1,4 +1,4 @@
-# End-to-end smoke test against a running n8n.  Usage: .\test-chat.ps1 [-BaseUrl http://localhost:5678]
+﻿# End-to-end smoke test against a running n8n.  Usage: .\test-chat.ps1 [-BaseUrl http://localhost:5678]
 param([string]$BaseUrl = "http://localhost:5678")
 
 $url = "$BaseUrl/webhook/faq-chat"
@@ -46,3 +46,4 @@ $ok = ($h.status -eq "ok"); if (-not $ok) { $fail++ }
 
 "`nFailures: $fail"
 exit $fail
+
