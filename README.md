@@ -14,10 +14,13 @@ Widget ──POST /webhook/faq-chat──▶ ValidateInput ─▶ LoadFaqs (Post
                                   400 if invalid     BuildPrompt (whole FAQ catalogue)
                                                          │
                                                   gpt-4o-mini (JSON: language, faq_ids, confidence, reply)
+                                                    │        │ error
+                                                    │     RetryPlan ─▶ CanRetry ─▶ Backoff (1 s, 2 s) ─▶ back to gpt-4o-mini
+                                                    │                     │ no more retries / permanent error
+                                                  ParseAnswer  ◀──────────┘   ◀── rules decide
                                                          │
-                                                  ParseAnswer  ◀── rules decide
-                                                         │
-                                         SaveConversation ─▶ JSON reply to the widget
+                                         LogConversation ─▶ JSON reply to the widget
+                                    (sub-workflow Sub_LogConversation)
 ```
 If the answer is not reliable, the bot replies with a fixed hand-off message (en/it/de/fr/es) asking for an email. A second call (`action: leave_contact`) stores the email with the unanswered question in `handoff_requests` and **emails the support team** (`NotifyTeam` node: question, customer email, Reply-To set to the customer so support just hits "reply"). The email is sent only for new requests (a repeated identical request does not notify twice) and a mail failure never blocks the customer's response: the request is already safe in the database.
 
@@ -26,6 +29,8 @@ If the answer is not reliable, the bot replies with a fixed hand-off message (en
 - **No vector DB.** The whole catalogue (25 FAQs ≈ 2.5k tokens) goes in the prompt: simpler, no embeddings to keep in sync, < $0.001 per message with gpt-4o-mini. Beyond ~200 FAQs, pre-filter with pgvector.
 - **FAQs live in PostgreSQL**, not in the workflow: the client edits rows (or re-runs `seed_faqs.sql` with their own text) without touching n8n.
 - **Prompt-injection hardening**: customer text is passed as untrusted data in delimiters, and the fixed rules in `ParseAnswer` limit what can be shown.
+- **Retry with exponential backoff, then fallback.** The LLM call has 3 attempts with waits of ~1 s and ~2 s (+ jitter), kept short because the customer is waiting. Errors that cannot heal (quota, credentials, unknown model, bad request) skip the retries. When retries run out the request goes down the fallback branch to `ParseAnswer`, which answers with the hand-off message: the customer always gets a reply. Read-only/idempotent DB nodes (`LoadFaqs`, `SaveHandoff`) retry 3× at 1 s; the conversation log does not, to avoid duplicate rows. Unhandled failures reach `Global_ErrorHandler` (Telegram alert).
+- **Logging is a sub-workflow** (`Sub_LogConversation`): typed inputs (`session_id, user_message, reply, matched_faq_ids, confidence, handoff`), normalisation, insert, returns `conversation_id`. Any future channel (WhatsApp, email bot) logs the same way, and a schema change is made in one place.
 - **Everything is logged** (`conversations`) with the FAQ ids used and the confidence, so any answer can be traced to its source.
 - **Language**: detected from the text of the message (not from countries it mentions); the model answers in that language.
 
@@ -39,7 +44,7 @@ SELECT * FROM handoff_requests WHERE status = 'open';
 ## Run it
 1. `cp .env.example .env` and fill in the values.
 2. `docker compose up -d` (creates the schema and loads the sample FAQs on first start).
-3. In n8n: create the credentials **Postgres** (host `postgres`, DB/user/password from `.env`) and **OpenAI**, and **SMTP** (the client's mail provider; for local tests use [Mailpit](https://github.com/axllent/mailpit): `docker run -p 1025:1025 -p 8025:8025 axllent/mailpit`). Import `workflow/ai-faq-chatbot.json`, assign the credentials to the Postgres, OpenAI and NotifyTeam nodes, set the real sender/recipient addresses in `NotifyTeam`, and activate it.
+3. In n8n: create the credentials **Postgres** (host `postgres`, DB/user/password from `.env`) and **OpenAI**, and **SMTP** (the client's mail provider; for local tests use [Mailpit](https://github.com/axllent/mailpit): `docker run -p 1025:1025 -p 8025:8025 axllent/mailpit`). Import `workflow/sub-log-conversation.json` first, assign the Postgres credential and publish/activate it. Then import `workflow/ai-faq-chatbot.json`, select `Sub_LogConversation` in the `LogConversation` node, assign the credentials to the Postgres, OpenAI and NotifyTeam nodes, set the real sender/recipient addresses in `NotifyTeam`, and activate it.
 4. Put your public n8n URL in `widget/index.html` (`WEBHOOK`) and paste the widget block into the site theme.
 5. Test: `powershell -File examples/test-chat.ps1 -BaseUrl http://localhost:5678`
 
@@ -61,4 +66,6 @@ Production: put n8n behind an Nginx reverse proxy with HTTPS (Let's Encrypt/cert
 - No rate limiting on the webhook (add it in Nginx or via a bot-protection token before going public).
 - The model could in theory add detail that is not in the FAQ; the prompt forbids it and the test suite checks the main cases, but there is no automatic fact check on the reply text.
 - The notification address is hard-coded in the `NotifyTeam` node (and the support address in `ParseAnswer`); move both to environment variables if several shops share one instance.
+- An LLM outage is handled silently (customers get the hand-off message, no alert is sent): watch `daily_resolution`, or add an alert on the fallback branch.
+- In the Postgres credential use the service name (`postgres` in compose) or `host.docker.internal`, never a container IP: Docker reassigns IPs on restart.
 - The customer is not told if the notification email failed (the request is saved and visible in `handoff_requests WHERE status = 'open'`).

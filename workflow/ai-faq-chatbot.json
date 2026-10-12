@@ -134,7 +134,10 @@
         896,
         -256
       ],
-      "alwaysOutputData": true
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
@@ -167,7 +170,10 @@
         896,
         -64
       ],
-      "alwaysOutputData": true
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
     },
     {
       "parameters": {
@@ -208,13 +214,74 @@
         1344,
         -64
       ],
-      "retryOnFail": true,
-      "maxTries": 2,
-      "onError": "continueRegularOutput"
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "// The LLM only proposes; the rules below decide whether the answer is shown.\nconst CONFIDENCE_MIN = 0.6;\nconst SUPPORT_EMAIL = 'support@nordictea.example';\n\nconst HANDOFF = {\n  en: `I'm not sure I can answer that reliably. Leave your email below and our team will reply within 1 business day, or write to ${SUPPORT_EMAIL}.`,\n  it: `Non sono sicuro di poterti rispondere in modo affidabile. Lascia la tua email qui sotto e il nostro team ti risponderà entro 1 giorno lavorativo, oppure scrivi a ${SUPPORT_EMAIL}.`,\n  de: `Da bin ich nicht sicher, ob ich zuverlässig antworten kann. Hinterlasse unten deine E-Mail-Adresse und unser Team antwortet innerhalb von 1 Werktag, oder schreibe an ${SUPPORT_EMAIL}.`,\n  fr: `Je ne suis pas certain de pouvoir répondre de façon fiable. Laissez votre e-mail ci-dessous et notre équipe vous répondra sous 1 jour ouvré, ou écrivez à ${SUPPORT_EMAIL}.`,\n  es: `No estoy seguro de poder responder con fiabilidad. Deja tu email abajo y nuestro equipo te responderá en 1 día laborable, o escribe a ${SUPPORT_EMAIL}.`,\n};\n\nconst catalogIds = $('BuildPrompt').first().json.catalog_ids || [];\n\nlet parsed = null;\ntry {\n  let raw = $input.first().json.output[0].content[0].text;\n  const fenced = raw.match(/```(?:json)?\\s*([\\s\\S]*?)```/);\n  if (fenced) raw = fenced[1];\n  parsed = JSON.parse(raw.trim());\n} catch (e) {\n  parsed = null; // LLM error or invalid JSON -> hand off, never guess\n}\n\nconst lang = parsed && HANDOFF[parsed.language] ? parsed.language : 'en';\nconst ids = parsed && Array.isArray(parsed.faq_ids)\n  ? [...new Set(parsed.faq_ids.map(Number).filter(id => catalogIds.includes(id)))]\n  : [];\nconst confidence = parsed ? Math.max(0, Math.min(1, Number(parsed.confidence) || 0)) : 0;\nconst reply = parsed && typeof parsed.reply === 'string' ? parsed.reply.trim() : '';\n\nconst answered = ids.length > 0 && reply !== '' && confidence >= CONFIDENCE_MIN;\n\nreturn [{ json: {\n  reply: answered ? reply : HANDOFF[lang],\n  matched_faq_ids: answered ? ids : [],\n  confidence,\n  handoff: !answered,\n} }];"
+        "jsCode": "// Exponential backoff for the LLM call: 3 attempts in total, waits ~1 s then ~2 s.\n// Kept short on purpose: the customer is waiting for the webhook response.\nconst MAX_ATTEMPTS = 3;\nconst BASE_DELAY_S = 1;\n// Errors that will not go away by retrying (n8n reports only the message, no status code).\nconst PERMANENT = /quota|authori[sz]|credential|api key|could not be found|bad request|invalid|context length|content policy/i;\n\nconst item = $input.first().json;\nconst error = String(item.error ?? 'unknown error');\nconst attempt = $runIndex + 1; // this node runs once per failed attempt\nconst retryable = !PERMANENT.test(error);\nconst retry = retryable && attempt < MAX_ATTEMPTS;\nconst jitter = Math.round(Math.random() * 300) / 1000;\nconst delaySeconds = retry ? BASE_DELAY_S * 2 ** (attempt - 1) + jitter : 0;\n\nreturn [{ json: { ...item, error, attempt, retryable, retry, delaySeconds } }];"
+      },
+      "id": "n-retryplan",
+      "name": "RetryPlan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c4",
+              "leftValue": "={{ $json.retry }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n-canretry",
+      "name": "CanRetry",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1792,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.delaySeconds }}",
+        "unit": "seconds"
+      },
+      "id": "n-backoff",
+      "name": "Backoff",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1344,
+        208
+      ],
+      "webhookId": "faq-chat-backoff-0001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The LLM only proposes; the rules below decide whether the answer is shown.\nconst CONFIDENCE_MIN = 0.6;\nconst SUPPORT_EMAIL = 'support@nordictea.example';\n\nconst HANDOFF = {\n  en: `I'm not sure I can answer that reliably. Leave your email below and our team will reply within 1 business day, or write to ${SUPPORT_EMAIL}.`,\n  it: `Non sono sicuro di poterti rispondere in modo affidabile. Lascia la tua email qui sotto e il nostro team ti risponderà entro 1 giorno lavorativo, oppure scrivi a ${SUPPORT_EMAIL}.`,\n  de: `Da bin ich nicht sicher, ob ich zuverlässig antworten kann. Hinterlasse unten deine E-Mail-Adresse und unser Team antwortet innerhalb von 1 Werktag, oder schreibe an ${SUPPORT_EMAIL}.`,\n  fr: `Je ne suis pas certain de pouvoir répondre de façon fiable. Laissez votre e-mail ci-dessous et notre équipe vous répondra sous 1 jour ouvré, ou écrivez à ${SUPPORT_EMAIL}.`,\n  es: `No estoy seguro de poder responder con fiabilidad. Deja tu email abajo y nuestro equipo te responderá en 1 día laborable, o escribe a ${SUPPORT_EMAIL}.`,\n};\n\nconst catalogIds = $('BuildPrompt').first().json.catalog_ids || [];\n\nlet parsed = null;\ntry {\n  let raw = $input.first().json.output[0].content[0].text;\n  const fenced = raw.match(/```(?:json)?\\s*([\\s\\S]*?)```/);\n  if (fenced) raw = fenced[1];\n  parsed = JSON.parse(raw.trim());\n} catch (e) {\n  parsed = null; // LLM failed after retries (fallback branch) or invalid JSON -> hand off, never guess\n}\n\nconst lang = parsed && HANDOFF[parsed.language] ? parsed.language : 'en';\nconst ids = parsed && Array.isArray(parsed.faq_ids)\n  ? [...new Set(parsed.faq_ids.map(Number).filter(id => catalogIds.includes(id)))]\n  : [];\nconst confidence = parsed ? Math.max(0, Math.min(1, Number(parsed.confidence) || 0)) : 0;\nconst reply = parsed && typeof parsed.reply === 'string' ? parsed.reply.trim() : '';\n\nconst answered = ids.length > 0 && reply !== '' && confidence >= CONFIDENCE_MIN;\n\nreturn [{ json: {\n  reply: answered ? reply : HANDOFF[lang],\n  matched_faq_ids: answered ? ids : [],\n  confidence,\n  handoff: !answered,\n} }];"
       },
       "id": "n-parse",
       "name": "ParseAnswer",
@@ -227,16 +294,94 @@
     },
     {
       "parameters": {
-        "operation": "executeQuery",
-        "query": "INSERT INTO conversations (session_id, user_message, reply, matched_faq_ids, confidence, handoff)\nVALUES ($1, $2, $3, $4::int[], $5::numeric, $6::boolean)\nRETURNING id;",
-        "options": {
-          "queryReplacement": "={{ [ $('ValidateInput').first().json.session_id, $('ValidateInput').first().json.message, $('ParseAnswer').first().json.reply, '{' + $('ParseAnswer').first().json.matched_faq_ids.join(',') + '}', $('ParseAnswer').first().json.confidence, $('ParseAnswer').first().json.handoff ] }}"
-        }
+        "workflowId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SUB_LOGCONVERSATION_ID",
+          "mode": "list",
+          "cachedResultName": "Sub_LogConversation"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "session_id": "={{ $('ValidateInput').first().json.session_id }}",
+            "user_message": "={{ $('ValidateInput').first().json.message }}",
+            "reply": "={{ $json.reply }}",
+            "matched_faq_ids": "={{ $json.matched_faq_ids }}",
+            "confidence": "={{ $json.confidence }}",
+            "handoff": "={{ $json.handoff }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "user_message",
+              "displayName": "user_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "reply",
+              "displayName": "reply",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "matched_faq_ids",
+              "displayName": "matched_faq_ids",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "handoff",
+              "displayName": "handoff",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
       },
-      "id": "n-save",
-      "name": "SaveConversation",
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.7,
+      "id": "n-logconv",
+      "name": "LogConversation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
       "position": [
         1920,
         -64
@@ -405,6 +550,53 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "RetryPlan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RetryPlan": {
+      "main": [
+        [
+          {
+            "node": "CanRetry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CanRetry": {
+      "main": [
+        [
+          {
+            "node": "Backoff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "ParseAnswer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backoff": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -412,18 +604,7 @@
       "main": [
         [
           {
-            "node": "SaveConversation",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "SaveConversation": {
-      "main": [
-        [
-          {
-            "node": "Ok_Response",
+            "node": "LogConversation",
             "type": "main",
             "index": 0
           }
@@ -464,6 +645,17 @@
         [
           {
             "node": "Contact_Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LogConversation": {
+      "main": [
+        [
+          {
+            "node": "Ok_Response",
             "type": "main",
             "index": 0
           }

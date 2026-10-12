@@ -1,0 +1,62 @@
+{
+  "name": "Sub_LogConversation",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            { "name": "session_id", "type": "string" },
+            { "name": "user_message", "type": "string" },
+            { "name": "reply", "type": "string" },
+            { "name": "matched_faq_ids", "type": "array" },
+            { "name": "confidence", "type": "number" },
+            { "name": "handoff", "type": "boolean" }
+          ]
+        }
+      },
+      "id": "s01",
+      "name": "When called by another workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Defensive defaults so every caller gets the same row shape.\nconst i = $input.first().json;\nconst ids = Array.isArray(i.matched_faq_ids) ? i.matched_faq_ids.map(Number).filter(Number.isInteger) : [];\n\nreturn [{ json: {\n  session_id: String(i.session_id ?? ''),\n  user_message: String(i.user_message ?? ''),\n  reply: String(i.reply ?? ''),\n  matched_faq_ids: '{' + ids.join(',') + '}', // Postgres int[] literal\n  confidence: Math.max(0, Math.min(1, Number(i.confidence) || 0)),\n  handoff: i.handoff === true,\n} }];"
+      },
+      "id": "s02",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [224, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO conversations (session_id, user_message, reply, matched_faq_ids, confidence, handoff)\nVALUES ($1, $2, $3, $4::int[], $5::numeric, $6::boolean)\nRETURNING id AS conversation_id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.session_id, $json.user_message, $json.reply, $json.matched_faq_ids, $json.confidence, $json.handoff ] }}"
+        }
+      },
+      "id": "s03",
+      "name": "InsertConversation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [448, 0]
+    }
+  ],
+  "connections": {
+    "When called by another workflow": {
+      "main": [[{ "node": "Normalize", "type": "main", "index": 0 }]]
+    },
+    "Normalize": {
+      "main": [[{ "node": "InsertConversation", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false
+}
