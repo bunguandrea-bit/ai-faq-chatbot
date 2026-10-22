@@ -1,6 +1,6 @@
 # Demo "Cantina Bricco Alto"
 
-Variante turistica di `ai-faq-chatbot` per il video demo e le conversazioni con le cantine (piano in `vendita-pmi/19-piano-contatti-pmi.md`, script del video in `vendita-pmi/21-video-demo-cantina.md`). Cantina e dati sono inventati.
+Variante di settore di `ai-faq-chatbot` (cantina con visite e degustazioni): una demo pronta per clienti di hospitality e wine. Cantina e dati sono inventati.
 
 ## Cosa c'è
 | File | A cosa serve |
