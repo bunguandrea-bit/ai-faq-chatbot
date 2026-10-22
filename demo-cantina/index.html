@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cantina Bricco Alto – demo assistente ospiti</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Figtree:wght@400;500;600&display=swap">
+<style>
+  :root { --paper: #f2f3ee; --ink: #1d2420; --muted: #59645d; --line: #d5d9cf; --vine: #2e5140; --vine-soft: #e1e9e2; --garnet: #7a2c3a; }
+  * { box-sizing: border-box; }
+  body { font-family: "Figtree", system-ui, sans-serif; background: var(--paper); margin: 0; color: var(--ink); line-height: 1.6; }
+  .demo-tag { background: var(--garnet); color: #fff; text-align: center; font-size: .8rem; padding: .3rem 1rem; letter-spacing: .04em; }
+  nav { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: 1.2rem 2rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  nav strong { font-family: "Young Serif", Georgia, serif; font-weight: 400; font-size: 1.4rem; }
+  nav span { color: var(--muted); font-size: .9rem; }
+  main { max-width: 56rem; padding: 3rem 2rem 8rem; display: grid; gap: 2.5rem; }
+  h1, h2 { font-family: "Young Serif", Georgia, serif; font-weight: 400; margin: 0; line-height: 1.15; }
+  h1 { font-size: clamp(2rem, 5vw, 3rem); max-width: 18ch; }
+  .lead { font-size: 1.15rem; color: var(--muted); max-width: 38rem; margin: .8rem 0 0; }
+  .tastings { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+  .tastings div { border-top: 2px solid var(--vine); padding-top: .8rem; }
+  .tastings b { display: block; font-weight: 600; }
+  .tastings span { color: var(--muted); font-size: .93rem; }
+  .price { font-family: "Young Serif", Georgia, serif; color: var(--garnet); font-size: 1.3rem; }
+  @media (max-width: 720px) { .tastings { grid-template-columns: 1fr; } main { padding: 2rem 1rem 8rem; } nav { padding: 1rem; } }
+
+  /* ===== Widget ===== */
+  #guest-chat { position: fixed; right: 1rem; bottom: 1rem; width: min(380px, calc(100vw - 2rem)); background: #fbfbf8;
+    border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 12px 32px rgba(20,30,25,.18); display: flex; flex-direction: column; max-height: 75vh; }
+  #guest-chat header { background: var(--vine); color: #fff; padding: .8rem 1rem; border-radius: 16px 16px 0 0; }
+  #guest-chat header b { font-family: "Young Serif", Georgia, serif; font-weight: 400; font-size: 1.05rem; display: block; }
+  #guest-chat header small { opacity: .85; }
+  #guest-log { flex: 1; overflow-y: auto; padding: .8rem; display: flex; flex-direction: column; gap: .5rem; min-height: 240px; }
+  .msg { padding: .55rem .8rem; border-radius: 14px; max-width: 86%; white-space: pre-wrap; line-height: 1.4; font-size: .93rem; }
+  .bot { background: var(--vine-soft); align-self: flex-start; border-bottom-left-radius: 4px; }
+  .me { background: var(--vine); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .typing { color: var(--muted); font-style: italic; }
+  #guest-form { display: flex; gap: .5rem; padding: .8rem; border-top: 1px solid var(--line); }
+  #guest-form input { flex: 1; min-width: 0; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: #fff; }
+  #guest-form button { padding: .55rem 1rem; border: 0; border-radius: 10px; background: var(--vine); color: #fff; cursor: pointer; font: inherit; font-weight: 500; }
+  #guest-form button:disabled { opacity: .5; cursor: wait; }
+</style>
+</head>
+<body>
+<div class="demo-tag">Cantina di esempio · dati inventati per la dimostrazione</div>
+<nav><strong>Cantina Bricco Alto</strong><span>La Morra · Langhe · dal 1962</span></nav>
+<main>
+  <section>
+    <h1>Barolo di famiglia, tra le colline di La Morra.</h1>
+    <p class="lead">Visite in cantina e degustazioni tutti i giorni, in italiano, inglese e tedesco. Prenotazione obbligatoria.</p>
+  </section>
+  <section class="tastings" aria-label="Degustazioni">
+    <div><b>Classica</b><span>5 vini · 90 minuti</span><div class="price">35 €</div></div>
+    <div><b>Verticale di Barolo</b><span>3 annate + 2 vini · 2 ore</span><div class="price">60 €</div></div>
+    <div><b>Picnic in vigna</b><span>Aprile–ottobre · 3 vini</span><div class="price">45 €</div></div>
+  </section>
+</main>
+
+<!-- ===== Widget: blocco da incollare nel sito del cliente, prima di </body> ===== -->
+<div id="guest-chat">
+  <header><b>Cantina Bricco Alto</b><small>Assistente automatico · risponde nella vostra lingua</small></header>
+  <div id="guest-log" aria-live="polite"></div>
+  <form id="guest-form">
+    <input id="guest-input" maxlength="500" autocomplete="off" placeholder="Scrivete qui la vostra domanda…" required>
+    <button type="submit">Invia</button>
+  </form>
+</div>
+<script>
+  // URL pubblico di n8n del cliente.
+  const WEBHOOK = "http://localhost:5678/webhook/faq-chat-cantina";
+
+  const sessionId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9_-]/g, "");
+  const log = document.getElementById("guest-log");
+  const form = document.getElementById("guest-form");
+  const input = document.getElementById("guest-input");
+  const button = form.querySelector("button");
+  let awaitingEmail = false;
+
+  function add(text, who) {
+    const d = document.createElement("div");
+    d.className = "msg " + who;
+    d.textContent = text;           // textContent: mai inserire la risposta come HTML
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    return d;
+  }
+
+  async function post(payload) {
+    const res = await fetch(WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    return res.json();
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    add(text, "me");
+    button.disabled = true;
+    const typing = add("…", "bot typing");
+    try {
+      const data = awaitingEmail
+        ? await post({ session_id: sessionId, action: "leave_contact", email: text })
+        : await post({ session_id: sessionId, message: text });
+      typing.remove();
+      if (data.status === "ok") {
+        add(data.reply, "bot");
+        awaitingEmail = !!data.needs_contact;
+        input.placeholder = awaitingEmail ? "La vostra email · Your email…" : "Scrivete qui la vostra domanda…";
+        input.type = awaitingEmail ? "email" : "text";
+      } else {
+        add(awaitingEmail ? "L'email non sembra valida, riprovate. · That email does not look valid." : "Qualcosa è andato storto, riprovate. · Something went wrong, please try again.", "bot");
+      }
+    } catch {
+      typing.remove();
+      add("Non riesco a raggiungere il server. Scriveteci a info@briccoalto.example.", "bot");
+    } finally {
+      button.disabled = false;
+      input.focus();
+    }
+  });
+
+  add("Benvenuti alla Cantina Bricco Alto! Chiedetemi di degustazioni, orari, prezzi o come arrivare.\nWelcome · Willkommen · Bienvenue: write in your language.", "bot");
+</script>
+</body>
+</html>
